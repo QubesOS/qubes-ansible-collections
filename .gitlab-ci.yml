@@ -133,7 +133,7 @@ r4.3:ansible-deploy:
     - job: fetch:split-ssh
       optional: true
   variables:
-    TEST_TEMPLATE: fedora-43-xfce
+    TEST_TEMPLATE: fedora-44-xfce
     VM_IMAGE: qubes_4.3_64bit_stable.qcow2
   before_script:
     - !reference [.ansible-deploy, before_script]
