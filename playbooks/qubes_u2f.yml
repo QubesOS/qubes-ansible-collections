@@ -1,0 +1,106 @@
+---
+- name: Group target hosts
+  hosts: localhost
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Fail if qubes_u2f_install_hosts is not list
+      ansible.builtin.assert:
+        that:
+          qubes_u2f_install_hosts | default([]) | type_debug == "list"
+        fail_msg: "qubes_u2f_install_hosts must be a list of qubes"
+
+    - name: Create group qubes_u2f_install_hosts
+      ansible.builtin.add_host:
+        group: qubes_u2f_install_hosts
+        name: "{{ item }}"
+      loop: "{{ qubes_u2f_install_hosts | default([]) }}"
+
+- name: Compute target qubes facts
+  hosts: qubes_u2f_install_hosts
+  gather_facts: false
+  become: false
+  strategy: ansible.builtin.linear
+  connection: ansible.builtin.local
+  any_errors_fatal: true
+  tasks:
+    - name: Get hosts where qubes_u2f needs to be installed
+      delegate_to: localhost
+      block:
+        - name: Gather qube facts
+          qubesos.core.qube_facts:
+            name: "{{ inventory_hostname }}"
+            gather_template_vm: true
+
+        - name: Save target qube initial state
+          ansible.builtin.set_fact:
+            target_qube_initial_state: "{{ qubes_facts.state }}"
+
+        # add_host run only once
+        - name: Create group qubes_u2f_install_hosts_templates
+          ansible.builtin.add_host:
+            group: qubes_u2f_install_hosts_templates
+            name: "{{ hostvars[item].qubes_facts.template_vm }}"
+          loop: "{{ ansible_play_hosts }}"
+
+- name: Compute templates facts
+  hosts: qubes_u2f_install_hosts_templates
+  gather_facts: false
+  become: false
+  strategy: ansible.builtin.linear
+  connection: ansible.builtin.local
+  tasks:
+    - name: Get qubes facts
+      qubesos.core.qube_facts:
+        name: "{{ inventory_hostname }}"
+      delegate_to: localhost
+
+- name: Install Qubes U2F
+  hosts: qubes_u2f_install_hosts_templates
+  gather_facts: false
+  become: false
+  strategy: qubesos.security.qubes_proxy
+  connection: qubesos.core.qube
+  remote_user: root
+  tasks:
+    - name: Install qubes-u2f
+      ansible.builtin.package:
+        name: qubes-u2f
+
+- name: Reboot or shutdown templates
+  hosts: qubes_u2f_install_hosts_templates
+  gather_facts: false
+  become: false
+  strategy: ansible.builtin.linear
+  connection: ansible.builtin.local
+  tasks:
+    - name: Restore targets state
+      vars:
+        state: >-
+          {%- if qubes_u2f_reboot | default(false) | bool and qubes_facts.state | lower == "running" -%}restarted
+          {%- elif qubes_facts.state | lower == "running" -%}running
+          {%- else -%}halted
+          {%- endif -%}
+      qubesos.core.qube:
+        name: "{{ inventory_hostname }}"
+        state: "{{ state }}"
+        klass: "{{ qubes_facts.properties.klass }}"
+      delegate_to: localhost
+
+- name: Reboot target qubes
+  hosts: qubes_u2f_install_hosts
+  gather_facts: false
+  become: false
+  strategy: ansible.builtin.linear
+  connection: ansible.builtin.local
+  tasks:
+    - name: Reboot target qube
+      qubesos.core.qube:
+        name: "{{ inventory_hostname }}"
+        state: restarted
+        klass: "{{ qubes_facts.properties.klass }}"
+      delegate_to: localhost
+      when:
+        - qubes_u2f_reboot | default(false) | bool
+        - target_qube_initial_state | lower == "running"
+        - template_vm != inventory_hostname
