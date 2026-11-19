@@ -103,4 +103,4 @@
       when:
         - qubes_u2f_reboot | default(false) | bool
         - target_qube_initial_state | lower == "running"
-        - template_vm != inventory_hostname
+        - qubes_facts.template_vm != inventory_hostname
