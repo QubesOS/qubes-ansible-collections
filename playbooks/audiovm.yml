@@ -1,0 +1,226 @@
+---
+- name: Build initial groups
+  hosts: localhost
+  connection: ansible.builtin.local
+  gather_facts: false
+  become: true
+  vars:
+    audiovm_client_value: "{{ audiovm_clients | default([]) }}"
+    audiovm_pci_value: "{{ audiovm_pci_devices | default('auto') }}"
+    audiovm_template_value: "{{ audiovm_template | default('fedora-44-xfce') }}"
+  tasks:
+    - name: Normalize input
+      ansible.builtin.set_fact:
+        audiovm_qube: "{{ audiovm_name | default('sys-audio') }}"
+        audiovm_assign: []
+        audiovm_client_list: >-
+          {{ (audiovm_client_value.split(',') if audiovm_client_value is string
+              else audiovm_client_value) | map('trim') | select | list }}
+        audiovm_pci_list: >-
+          {{ audiovm_pci_value if audiovm_pci_value == 'auto'
+             else (audiovm_pci_value.split(',') if audiovm_pci_value is string
+                   else audiovm_pci_value) | select | list }}
+
+    - name: Validate the clients
+      ansible.builtin.assert:
+        that:
+          - audiovm_qube not in audiovm_client_list
+        fail_msg: "Cannot set '{{ audiovm_qube }}' as its own audiovm."
+
+    - name: Read the audiovm
+      qubesos.core.qube_facts:
+        name: "{{ audiovm_qube }}"
+      register: audiovm_read
+      failed_when: false
+
+    - name: Read the template of a new audiovm
+      qubesos.core.qube_facts:
+        name: "{{ audiovm_template_value }}"
+      register: audiovm_template_read
+      failed_when: false
+      when: audiovm_read.ansible_facts is not defined
+
+    - name: Install the template of a new audiovm
+      ansible.builtin.command: qvm-template install {{ audiovm_template_value }}
+      changed_when: true
+      when:
+        - audiovm_read.ansible_facts is not defined
+        - audiovm_template_read.ansible_facts is not defined
+
+    # An existing qube keeps its template, label, memory and netvm
+    - name: Create the audiovm
+      qubesos.core.qube:
+        name: "{{ audiovm_qube }}"
+        state: present
+        klass: AppVM
+        template: "{{ audiovm_template_value }}"
+        properties:
+          label: "{{ audiovm_label | default('black') }}"
+          memory: "{{ audiovm_memory | default(400) }}"
+          netvm: null
+      when: audiovm_read.ansible_facts is not defined
+
+    - name: Add the audiovm
+      ansible.builtin.add_host:
+        name: "{{ audiovm_qube }}"
+        groups: audiovm_qubes
+      changed_when: false
+
+- name: Gather qube facts
+  hosts: audiovm_qubes
+  gather_facts: false
+  strategy: ansible.builtin.linear
+  connection: ansible.builtin.local
+  any_errors_fatal: true
+  tasks:
+    - name: Gather qube facts
+      qubesos.core.qube_facts:
+        name: "{{ inventory_hostname }}"
+      delegate_to: localhost
+
+    - name: Gather the facts of the disposable template
+      qubesos.core.qube_facts:
+        name: "{{ qubes_facts.properties.template }}"
+      register: dvm_facts
+      delegate_to: localhost
+      delegate_facts: true
+      when: qubes_facts.properties.klass == 'DispVM'
+
+- name: Discover templates from facts
+  hosts: localhost
+  connection: ansible.builtin.local
+  gather_facts: false
+  vars:
+    audiovm_info: "{{ hostvars[audiovm_qube].qubes_facts }}"
+  tasks:
+    - name: Check whether the audiovm is a GUI domain
+      ansible.builtin.set_fact:
+        audiovm_on_guivm: "{{ audiovm_info.services.guivm | default(false) }}"
+
+    # A disposable sys-usb runs from the template of its disposable template
+    - name: Add the audiovm template
+      ansible.builtin.add_host:
+        name: >-
+          {{ audiovm_qube if audiovm_info.properties.klass == 'StandaloneVM'
+             else hostvars[audiovm_qube].dvm_facts.ansible_facts.qubes_facts.properties.template
+             if audiovm_info.properties.klass == 'DispVM'
+             else audiovm_info.properties.template }}
+        groups: audiovm_templates
+        ansible_connection: qubesos.core.qubes
+        audiovm_name: "{{ audiovm_qube }}"
+        audiovm_on_guivm: "{{ audiovm_on_guivm }}"
+      changed_when: false
+
+- name: Configure the audiovm in dom0
+  hosts: localhost
+  connection: ansible.builtin.local
+  gather_facts: false
+  become: true
+  handlers:
+    - name: Tell to restart the audiovm
+      ansible.builtin.debug:
+        msg: "{{ audiovm_qube }} changed, restart it if it is running."
+  tasks:
+    - name: Find the audio controllers of the host
+      qubesos.core.host_devices_facts:
+      when: audiovm_pci_list == 'auto'
+
+    - name: Build the PCI assignments
+      ansible.builtin.set_fact:
+        audiovm_assign: >-
+          {{ audiovm_assign + [item if item is mapping
+             else {'device': item, 'options': {'no-strict-reset': true}}] }}
+      loop: "{{ ansible_facts.pci_audio if audiovm_pci_list == 'auto' else audiovm_pci_list }}"
+      loop_control:
+        label: "{{ item.device | default(item) }}"
+
+    # Its own sound stays local, the minimal-usbvm service stops pipewire
+    - name: Set up the audiovm
+      qubesos.core.qube:
+        name: "{{ audiovm_qube }}"
+        state: present
+        properties: >-
+          {{ {'autostart': true, 'audiovm': none}
+             | combine({'virt_mode': 'hvm'} if audiovm_assign else {}) }}
+        services:
+          - audiovm
+        features: >-
+          {{ ({} if audiovm_on_guivm else {'servicevm': '1'})
+             | combine({'service.minimal-usbvm': none}) }}
+        devices:
+          strategy: append
+          items: "{{ audiovm_assign }}"
+      notify: Tell to restart the audiovm
+
+    - name: Read the default audiovm
+      ansible.builtin.command: qubes-prefs default_audiovm
+      register: default_audiovm_pref
+      changed_when: false
+      when: audiovm_default | default(false) | bool
+
+    - name: Make it the default audiovm
+      ansible.builtin.command: qubes-prefs default_audiovm {{ audiovm_qube }}
+      changed_when: true
+      when:
+        - audiovm_default | default(false) | bool
+        - default_audiovm_pref.stdout != audiovm_qube
+
+    - name: Play the sound of the clients in the audiovm
+      qubesos.core.qube:
+        name: "{{ item }}"
+        state: present
+        properties:
+          audiovm: "{{ audiovm_qube }}"
+      loop: "{{ audiovm_client_list }}"
+
+- name: Prepare templates
+  hosts: audiovm_templates
+  remote_user: root
+  gather_facts: false
+  collections:
+    - qubesos.setup
+  roles:
+    - role: audiovm
+      vars:
+        audiovm_phase: template
+
+- name: Install the audiovm policy
+  hosts: localhost
+  connection: ansible.builtin.local
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Write the audiovm policy
+      ansible.builtin.template:
+        src: templates/audiovm.policy.j2
+        dest: "/etc/qubes/policy.d/50-audio-{{ audiovm_qube }}.policy"
+        mode: "0664"
+        owner: root
+        group: qubes
+        validate: qubes-policy-lint %s
+      vars:
+        audiovm: "{{ audiovm_qube }}"
+      when: not audiovm_on_guivm
+
+    # A GUI domain has the admin API of the qubes it shows already
+    - name: Let the GUI domain read its audio clients
+      ansible.builtin.lineinfile:
+        path: /etc/qubes/policy.d/include/admin-local-ro
+        line: "{{ item }}"
+      loop:
+        - "{{ audiovm_qube }} @tag:audiovm-{{ audiovm_qube }} allow target=dom0"
+        - "{{ audiovm_qube }} {{ audiovm_qube }} allow target=dom0"
+      when: audiovm_on_guivm
+
+# The audiovm keeps running, a sys-usb holds the USB input
+- name: Shutdown templates
+  hosts: localhost
+  connection: ansible.builtin.local
+  gather_facts: false
+  tasks:
+    - name: Shut down templates
+      qubesos.core.qube:
+        name: "{{ item }}"
+        state: halted
+        klass: TemplateVM
+      loop: "{{ groups.get('audiovm_templates', []) | difference([audiovm_qube]) }}"

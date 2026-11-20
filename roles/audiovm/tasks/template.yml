@@ -1,0 +1,49 @@
+---
+- name: Gather the distribution
+  ansible.builtin.setup:
+    gather_subset: [min]
+
+- name: Install the audiovm packages
+  ansible.builtin.package:
+    name: >-
+      {{ audiovm_packages
+         + ([] if audiovm_on_guivm
+            else audiovm_applet_packages_debian if ansible_facts['os_family'] == 'Debian'
+            else audiovm_applet_packages_redhat) }}
+    state: present
+  notify: Tell to restart the audiovm
+
+# Only qubes with the audiovm service use them
+- name: Create the autostart drop-in directories
+  ansible.builtin.file:
+    path: "/etc/qubes/autostart/{{ item }}.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - qubes-pulseaudio.desktop
+    - pulseaudio.desktop
+
+- name: Do not send the audiovm sound to another audiovm
+  ansible.builtin.copy:
+    dest: /etc/qubes/autostart/qubes-pulseaudio.desktop.d/50_audiovm.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Desktop Entry]
+      AutostartCondition=unless-exists /run/qubes-service/audiovm
+  notify: Tell to restart the audiovm
+
+- name: Start the local sound server in the audiovm
+  ansible.builtin.copy:
+    dest: /etc/qubes/autostart/pulseaudio.desktop.d/50_audiovm.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Desktop Entry]
+      NotShowIn=
+      AutostartCondition=if-exists /run/qubes-service/audiovm
+  notify: Tell to restart the audiovm

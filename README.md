@@ -37,6 +37,7 @@ ansible-galaxy collection install qubesos-setup-*.tar.gz
 | `split_gpg` | template + qube (vault or client) | Install `qubes-gpg-split` packages (its `/etc/profile.d/qubes-gpg.sh` defaults `QUBES_GPG_DOMAIN` to `@default` when unconfigured); in the vault, ensure `~/.gnupg` exists. Vault routing is done in qrexec policy via `@default target=<vault>`. |
 | `qsvc_qube` | template + qube | Install packages, add qubes-service systemd condition, enable units; drop per-service `rc.local.d/30-<svc>.rc` snippet (bind-dirs delegated to `bind_dirs`). |
 | `qsvc_dom0` | dom0 | Enable `qvm-service` flag for a list of qubes. |
+| `audiovm` | template | Install `qubes-core-admin-client`, `qubes-audio-daemon` and a volume applet in the template of the audiovm, with autostart drop-ins that only apply in qubes with the `audiovm` service. The `audiovm` playbook does the dom0 part: the qube, its PCI devices, services and policy. |
 
 Roles that target both `template` and `qube` auto-detect the host's
 klass via `qubesos.core.qube_facts` and run the appropriate phase.
@@ -266,6 +267,60 @@ ansible-playbook qubesos.setup.bind_dirs \
 (`qubes-bind-dirs.d/50-<tag>.conf`) to avoid collisions between
 callers. The `50-` priority prefix can be overridden via
 `-e bind_dirs_priority=<NN>` if you need a specific load order.
+
+### AudioVM
+
+The playbook makes a qube the audiovm.
+It creates the qube when it does not exist.
+An existing qube keeps its template, label, memory and netvm, so a USB qube can be the audiovm too, disposable or not.
+
+```bash
+ansible-playbook qubesos.setup.audiovm -e audiovm_default=true
+```
+
+This creates `sys-audio` from `audiovm_template`, gives it every audio controller of the host and makes it the default audiovm.
+
+Make `sys-usb` the audiovm of some qubes, for USB headsets, and keep the sound card in dom0:
+
+```bash
+ansible-playbook qubesos.setup.audiovm \
+  -e audiovm_name=sys-usb -e audiovm_clients=work,personal \
+  -e '{"audiovm_pci_devices": []}'
+```
+
+Without the empty `audiovm_pci_devices`, `sys-usb` also gets the audio controllers of the host.
+PCI devices are added to the ones already assigned, the USB controllers stay.
+
+The audiovm plays its own sound on its hardware, its `audiovm` property is set to none.
+In its template, the role installs `qubes-core-admin-client` and `qubes-audio-daemon`, and adds autostart drop-ins that only apply in qubes with the `audiovm` service.
+The audio daemon runs in the desktop session of the audiovm and plays through its sound server.
+A minimal template may have neither, add the packages to `audiovm_packages`.
+
+The role removes the `minimal-usbvm` service from the audiovm, because that service stops pipewire and wireplumber.
+This also brings back bluetooth, polkit and gvfs in a USB qube.
+The stock `sys-usb` has 300 MB of memory, which leaves about 50 MB free with the sound server running: raise it for heavier use.
+
+When the qube is already a GUI domain (it has the `guivm` service), it becomes the audiovm too.
+Its admin API comes from `include/admin-local-ro` instead of a policy file, and it gets no volume applet.
+
+The playbook does not shut the audiovm down, a `sys-usb` holds the USB input.
+New PCI devices and template changes apply at its next start, the playbook says when to restart it.
+qubesd refuses to shut down an audiovm while its clients run: stop them first, or use `qvm-shutdown --force`.
+
+> Note: this playbook replaces the `qvm.sys-audio` and `qvm.default-audiovm` Salt formulas of `qubes-mgmt-salt-dom0-virtual-machines`.
+> The session settings of `qvm.sys-audio-vm` are autostart drop-ins in the template instead of files in the home of the audiovm.
+
+Variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `audiovm_name` | `sys-audio` | Qube to make the audiovm |
+| `audiovm_template` | Fedora XFCE | Template of a new qube, installed when missing |
+| `audiovm_label` | `black` | Label of a new qube |
+| `audiovm_memory` | `400` | Initial memory of a new qube |
+| `audiovm_pci_devices` | `auto` | PCI devices to add, `auto` is every audio controller of the host, entries are device specs or `{device, mode, options}` |
+| `audiovm_default` | `false` | Set `default_audiovm` to the audiovm |
+| `audiovm_clients` | `[]` | Qubes whose `audiovm` is set to the audiovm |
 
 ### Importing into your own playbook
 

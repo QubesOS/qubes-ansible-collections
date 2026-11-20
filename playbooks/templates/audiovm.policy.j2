@@ -1,0 +1,16 @@
+admin.Events  *  {{ audiovm }}  {{ audiovm }}  allow target=dom0
+admin.Events  *  {{ audiovm }}  @adminvm  allow target=dom0
+admin.Events  *  {{ audiovm }}  @tag:audiovm-{{ audiovm }}  allow target=dom0
+admin.vm.CurrentState  *  {{ audiovm }}  {{ audiovm }}  allow target=dom0
+admin.vm.CurrentState  *  {{ audiovm }}  @adminvm  allow target=dom0
+admin.vm.CurrentState  *  {{ audiovm }}  @tag:audiovm-{{ audiovm }}  allow target=dom0
+admin.vm.List  *  {{ audiovm }}  {{ audiovm }}  allow target=dom0
+admin.vm.List  *  {{ audiovm }}  @adminvm  allow target=dom0
+admin.vm.List  *  {{ audiovm }}  @tag:audiovm-{{ audiovm }}  allow target=dom0
+admin.vm.property.Get  +audiovm  {{ audiovm }}  @tag:audiovm-{{ audiovm }}  allow target=dom0
+admin.vm.property.Get  +xid  {{ audiovm }}  @tag:audiovm-{{ audiovm }}  allow target=dom0
+admin.vm.property.Get  +stubdom_xid  {{ audiovm }}  @tag:audiovm-{{ audiovm }}  allow target=dom0
+admin.vm.property.Get  +virt_mode  {{ audiovm }}  @tag:audiovm-{{ audiovm }}  allow target=dom0
+admin.vm.property.Get  +is_preload  {{ audiovm }}  @tag:audiovm-{{ audiovm }}  allow target=dom0
+admin.vm.feature.CheckWithTemplate  +audio  {{ audiovm }}  @tag:audiovm-{{ audiovm }}  allow target=dom0
+admin.vm.feature.CheckWithTemplate  +audio-model  {{ audiovm }}  @tag:audiovm-{{ audiovm }}  allow target=dom0
