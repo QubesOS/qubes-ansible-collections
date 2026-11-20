@@ -1,0 +1,47 @@
+policy.EvalGUI  +qubes.ClipboardPaste  {{ guivm }}  dom0  allow
+qubes.GetImageRGBA  *  {{ guivm }}  @tag:guivm-{{ guivm }}  allow
+qubes.GetAppmenus  *  {{ guivm }}  @tag:guivm-{{ guivm }}  allow
+qubes.ClipboardCopy  +  {{ guivm }}  @tag:guivm-{{ guivm }}  allow
+qubes.ClipboardPaste  +  {{ guivm }}  @tag:guivm-{{ guivm }}  allow
+# FIXME: limit to templates related to @tag:guivm-{{ guivm }} only
+qubes.GetAppmenus  *  {{ guivm }}  @type:TemplateVM  allow
+qubes.SetMonitorLayout  *  {{ guivm }}  @tag:guivm-{{ guivm }}  allow
+qubes.StartApp  *  {{ guivm }}  @tag:guivm-{{ guivm }}  allow
+qubes.StartApp  *  {{ guivm }}  @dispvm:@tag:guivm-{{ guivm }}  allow
+qubes.SyncAppMenus  *  @tag:guivm-{{ guivm }}  dom0  allow target={{ guivm }}
+qubes.WindowIconUpdater  *  @tag:guivm-{{ guivm }}  dom0  allow target={{ guivm }}
+qubes.Notifications  *  @tag:guivm-{{ guivm }}  @default  allow target={{ guivm }} autostart=no
+qubes.WaitForSession  *  {{ guivm }}  @tag:guivm-{{ guivm }}  allow
+{% if 'psu' in guivm_module_list %}
+qubes.PowerSupply  *  {{ guivm }}  @default  allow target=dom0
+{% endif %}
+{% if 'backlight' in guivm_module_list %}
+qubes.SetBrightness  *  {{ guivm }}  @default  allow target=dom0
+{% endif %}
+
+# Parts of Admin API necessary for GUI-related tools to work
+admin.vm.List  *  {{ guivm }}  dom0  allow
+admin.vm.List  *  {{ guivm }}  {{ guivm }}  allow target=dom0
+admin.vm.List  *  {{ guivm }}  @tag:guivm-{{ guivm }}  allow target=dom0
+admin.Events  *  {{ guivm }}  dom0  allow
+admin.Events  *  {{ guivm }}  {{ guivm }}  allow target=dom0
+admin.Events  *  {{ guivm }}  @tag:guivm-{{ guivm }}  allow target=dom0
+admin.label.Get  *  {{ guivm }}  dom0  allow
+admin.label.Index  *  {{ guivm }}  dom0  allow
+admin.vm.feature.Set  +keyboard-layout  {{ guivm }}  {{ guivm }}  allow target=dom0
+admin.vm.property.Get  *  {{ guivm }}  dom0  allow
+admin.vm.volume.List  *  {{ guivm }}  dom0  allow
+admin.vm.device.pci.Available  *  {{ guivm }}  dom0  allow
+admin.vm.device.mic.Available  *  {{ guivm }}  dom0  allow
+admin.vm.feature.Get  +internal  {{ guivm }}  dom0  allow
+admin.vm.feature.Get  +servicevm  {{ guivm }}  dom0  allow
+# FIXME: find a way to avoid this one (ram, cpu usage)
+admin.vm.CurrentState  *  {{ guivm }}  dom0  allow
+{% if stats_filter | bool %}
+admin.vm.Stats  *  {{ guivm }}  dom0  allow
+admin.vm.Stats  *  {{ guivm }}  {{ guivm }}  allow target=dom0
+admin.vm.Stats  *  {{ guivm }}  @tag:guivm-{{ guivm }}  allow target=dom0
+{% else %}
+# FIXME: allow once qubesd filters it per qube
+admin.vm.Stats  *  {{ guivm }}  dom0  deny notify=no
+{% endif %}

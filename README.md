@@ -38,6 +38,7 @@ ansible-galaxy collection install qubesos-setup-*.tar.gz
 | `qsvc_qube` | template + qube | Install packages, add qubes-service systemd condition, enable units; drop per-service `rc.local.d/30-<svc>.rc` snippet (bind-dirs delegated to `bind_dirs`). |
 | `qsvc_dom0` | dom0 | Enable `qvm-service` flag for a list of qubes. |
 | `audiovm` | template | Install `qubes-core-admin-client`, `qubes-audio-daemon` and a volume applet in the template of the audiovm, with autostart drop-ins that only apply in qubes with the `audiovm` service. The `audiovm` playbook does the dom0 part: the qube, its PCI devices, services and policy. |
+| `guivm` | template + qube | Install the XFCE GUI domain packages and the lightdm unit in the template, hide the network applet in the session and set the lightdm password of `gpu` and `vnc`. The `guivm` playbook does the dom0 part: the qube, its services, policy and admin API includes, and the GPU. |
 
 Roles that target both `template` and `qube` auto-detect the host's
 klass via `qubesos.core.qube_facts` and run the appropriate phase.
@@ -321,6 +322,66 @@ Variables:
 | `audiovm_pci_devices` | `auto` | PCI devices to add, `auto` is every audio controller of the host, entries are device specs or `{device, mode, options}` |
 | `audiovm_default` | `false` | Set `default_audiovm` to the audiovm |
 | `audiovm_clients` | `[]` | Qubes whose `audiovm` is set to the audiovm |
+
+### GUI domain
+
+The playbook makes a qube a GUI domain.
+`guivm_type` selects its kind:
+
+- `gui`: `sys-gui`, its desktop shows in a dom0 session named after it
+- `gpu`: `sys-gui-gpu`, owns a GPU and gets the dom0 and USB input devices
+- `vnc`: `sys-gui-vnc`, reached through VNC
+
+```bash
+ansible-playbook qubesos.setup.guivm -e guivm_default=true -e guivm_dummy_modules=psu,backlight
+```
+
+This creates `sys-gui`, installs the GUI domain packages in its template, writes `50-gui-sys-gui.policy` and makes `sys-gui` the default GUI domain.
+Log out and pick the "GUI Domain (sys-gui)" session in lightdm to use it.
+
+A GPU GUI domain with the Intel integrated GPU:
+
+```bash
+ansible-playbook qubesos.setup.guivm \
+  -e guivm_name=sys-gui-gpu -e guivm_type=gpu \
+  -e '{"guivm_pci_devices": [{"device": "pci:dom0:00_02.0", "options": {"permissive": true}}]}' \
+  -e guivm_password_hash="$(openssl passwd -6)"
+```
+
+The GPU is assigned last.
+The session setup must not start the qube with the GPU, so a later run skips it while the qube is halted with PCI devices.
+The password hash is set at each boot for the lightdm login of `gpu` and `vnc`, without it the account stays locked.
+
+The session setup runs in the qube, or in its disposable template for a disposable GUI domain.
+The playbook starts the qube for it and shuts it down again if it was halted.
+
+The GUI policy also allows `admin.vm.List` and `admin.Events` on the GUI domain itself.
+Without them `qui-domains`, the app menu and `qvm-start-daemon` stop on `KeyError` because the GUI domain cannot see itself.
+`admin.vm.Stats` is allowed only when qubesd filters it per qube.
+Otherwise it is denied without notification, since dom0 would send the stats of every qube, and `qui-domains` shows no CPU and memory use.
+
+> Note: this playbook replaces the `qvm.sys-gui`, `qvm.sys-gui-gpu`, `qvm.sys-gui-vnc` and `qvm.default-guivm` Salt formulas of `qubes-mgmt-salt-dom0-virtual-machines`, one `guivm_type` per formula.
+> The GPU assignment replaces the `qvm.sys-gui-gpu-attach-gpu` state.
+> The GUI policy is the one of the formulas, plus the `admin.vm.List`, `admin.Events` and `admin.vm.Stats` rules above.
+
+Variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `guivm_name` | `sys-gui` | Qube to make a GUI domain |
+| `guivm_type` | `gui` | `gui`, `gpu` or `vnc` |
+| `guivm_template` | Fedora XFCE | Template of a new qube, installed when missing |
+| `guivm_label` | `black` | Label of a new qube |
+| `guivm_maxmem` | `4000` | Maximum memory of a new qube |
+| `guivm_pci_devices` | `[]` | PCI devices to add, device specs or `{device, mode, options}` |
+| `guivm_dummy_modules` | `[]` | `psu` and `backlight` forward the battery and the backlight (`gpu` only has `psu`) |
+| `guivm_admin_global_permissions` | `''` | Admin API over every qube, `ro` or `rwx` |
+| `guivm_default` | `false` | Set `default_guivm` to the GUI domain |
+| `guivm_clients` | `[]` | Qubes whose `guivm` is set to the GUI domain |
+| `guivm_password_hash` | `''` | Password hash of the GUI domain user (`gpu` and `vnc`) |
+| `guivm_usbvm` | `sys-usb` | USB qube sending input devices to a `gpu` GUI domain |
+| `guivm_mouse_action` | `ask` | `ask`, `allow` or `deny` for USB mice (`gpu`) |
+| `guivm_keyboard_action` | `deny` | `ask`, `allow` or `deny` for USB keyboards (`gpu`) |
 
 ### Importing into your own playbook
 

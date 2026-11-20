@@ -1,0 +1,383 @@
+---
+- name: Build initial groups
+  hosts: localhost
+  connection: ansible.builtin.local
+  gather_facts: false
+  become: true
+  vars:
+    guivm_client_value: "{{ guivm_clients | default([]) }}"
+    guivm_module_value: "{{ guivm_dummy_modules | default([]) }}"
+    guivm_pci_value: "{{ guivm_pci_devices | default([]) }}"
+    guivm_template_value: "{{ guivm_template | default('fedora-44-xfce') }}"
+  tasks:
+    - name: Normalize input
+      ansible.builtin.set_fact:
+        guivm_qube: "{{ guivm_name | default('sys-gui') }}"
+        guivm_kind: "{{ guivm_type | default('gui') }}"
+        guivm_client_list: >-
+          {{ (guivm_client_value.split(',') if guivm_client_value is string
+              else guivm_client_value) | map('trim') | select | list }}
+        guivm_module_input: >-
+          {{ (guivm_module_value.split(',') if guivm_module_value is string
+              else guivm_module_value) | map('trim') | select | list }}
+        guivm_pci_list: >-
+          {{ (guivm_pci_value.split(',') if guivm_pci_value is string
+              else guivm_pci_value) | select | list }}
+        guivm_admin_global: "{{ guivm_admin_global_permissions | default('') }}"
+        guivm_mouse: "{{ guivm_mouse_action | default('ask') }}"
+        guivm_keyboard: "{{ guivm_keyboard_action | default('deny') }}"
+
+    - name: Validate input
+      ansible.builtin.assert:
+        that:
+          - guivm_kind in ['gui', 'gpu', 'vnc']
+          - guivm_admin_global in ['', 'ro', 'rwx']
+          - guivm_mouse in ['ask', 'allow', 'deny']
+          - guivm_keyboard in ['ask', 'allow', 'deny']
+          - guivm_qube not in guivm_client_list
+        fail_msg: >-
+          Invalid input: guivm_type is 'gui', 'gpu' or 'vnc', guivm_admin_global_permissions
+          is '', 'ro' or 'rwx', the actions are 'ask', 'allow' or 'deny', and
+          '{{ guivm_qube }}' cannot be its own client.
+
+    - name: Read the GUI domain
+      qubesos.core.qube_facts:
+        name: "{{ guivm_qube }}"
+      register: guivm_read
+      failed_when: false
+
+    - name: Read the template of a new GUI domain
+      qubesos.core.qube_facts:
+        name: "{{ guivm_template_value }}"
+      register: guivm_template_read
+      failed_when: false
+      when: guivm_read.ansible_facts is not defined
+
+    - name: Install the template of a new GUI domain
+      ansible.builtin.command: qvm-template install {{ guivm_template_value }}
+      changed_when: true
+      when:
+        - guivm_read.ansible_facts is not defined
+        - guivm_template_read.ansible_facts is not defined
+
+    - name: Create the GUI domain
+      qubesos.core.qube:
+        name: "{{ guivm_qube }}"
+        state: present
+        klass: AppVM
+        template: "{{ guivm_template_value }}"
+        properties:
+          label: "{{ guivm_label | default('black') }}"
+          maxmem: "{{ guivm_maxmem | default(4000) }}"
+      when: guivm_read.ansible_facts is not defined
+
+    - name: Add the GUI domain
+      ansible.builtin.add_host:
+        name: "{{ guivm_qube }}"
+        groups: guivm_qubes
+      changed_when: false
+
+- name: Gather qube facts
+  hosts: guivm_qubes
+  gather_facts: false
+  strategy: ansible.builtin.linear
+  connection: ansible.builtin.local
+  any_errors_fatal: true
+  tasks:
+    - name: Gather qube facts
+      qubesos.core.qube_facts:
+        name: "{{ inventory_hostname }}"
+      delegate_to: localhost
+
+    - name: Gather the facts of the disposable template
+      qubesos.core.qube_facts:
+        name: "{{ qubes_facts.properties.template }}"
+      register: dvm_facts
+      delegate_to: localhost
+      delegate_facts: true
+      when: qubes_facts.properties.klass == 'DispVM'
+
+- name: Discover templates from facts
+  hosts: localhost
+  connection: ansible.builtin.local
+  gather_facts: false
+  vars:
+    guivm_info: "{{ hostvars[guivm_qube].qubes_facts }}"
+    # A disposable keeps its home in its disposable template
+    guivm_home_info: >-
+      {{ hostvars[guivm_qube].dvm_facts.ansible_facts.qubes_facts
+         if guivm_info.properties.klass == 'DispVM' else guivm_info }}
+  tasks:
+    - name: Name the template and the home of the GUI domain
+      ansible.builtin.set_fact:
+        guivm_is_audiovm: "{{ guivm_info.services.audiovm | default(false) }}"
+        guivm_template_qube: >-
+          {{ guivm_qube if guivm_info.properties.klass == 'StandaloneVM' else guivm_home_info.properties.template }}
+        guivm_home: "{{ guivm_home_info.name }}"
+        guivm_home_state: "{{ guivm_home_info.state }}"
+        # Starting a GPU GUI domain takes the GPU from dom0
+        guivm_skip_home: >-
+          {{ guivm_kind == 'gpu' and guivm_home_info.name == guivm_qube and guivm_info.state != 'running'
+             and guivm_info.assigned.pci | default([]) | length > 0 }}
+
+    - name: Add the GUI domain template
+      ansible.builtin.add_host:
+        name: "{{ guivm_template_qube }}"
+        groups: guivm_templates
+        ansible_connection: qubesos.core.qubes
+        guivm_name: "{{ guivm_qube }}"
+      changed_when: false
+
+    # The group keeps the homes of earlier imports in the same run
+    - name: Leave out the GUI domain homes of earlier imports
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        guivm_session_setup: false
+      loop: "{{ groups.get('guivm_homes', []) }}"
+      changed_when: false
+
+    - name: Set connection for the GUI domain home
+      ansible.builtin.add_host:
+        name: "{{ guivm_home }}"
+        groups: guivm_homes
+        ansible_connection: qubesos.core.qubes
+        guivm_name: "{{ guivm_qube }}"
+        guivm_type: "{{ guivm_kind }}"
+        guivm_user: "{{ guivm_home_info.properties.default_user | default('user') }}"
+        guivm_user_password_hash: "{{ guivm_password_hash | default('') }}"
+        guivm_session_setup: true
+      changed_when: false
+      when: not guivm_skip_home
+
+    - name: Tell why the session of the GUI domain is not set up
+      ansible.builtin.debug:
+        msg: >-
+          {{ guivm_qube }} is halted with PCI devices, starting it would take the GPU from dom0.
+          Its session was set up by an earlier run, or detach the GPU and run again.
+      when: guivm_skip_home
+
+- name: Configure the GUI domain in dom0
+  hosts: localhost
+  connection: ansible.builtin.local
+  gather_facts: false
+  become: true
+  vars:
+    guivm_types:
+      gui:
+        properties: {netvm: null, guivm: dom0, audiovm: dom0, autostart: true}
+        services: [guivm, guivm-gui-agent]
+        features:
+          gui-allow-fullscreen: "1"
+          # Let the GUI domain see these instead of dom0
+          gui-secure-copy-sequence: "none"
+          gui-secure-paste-sequence: "none"
+        dummy_modules: [psu, backlight]
+      gpu:
+        properties: {virt_mode: hvm, netvm: null, guivm: null, audiovm: null, memory: 1000, autostart: false}
+        services: [lightdm, guivm]
+        features: {video-model: "none", input-dom0-proxy: "1"}
+        dummy_modules: [psu]
+      vnc:
+        properties: {netvm: null, guivm: dom0, audiovm: null, autostart: true}
+        services: [lightdm, guivm, guivm-vnc]
+        features: {}
+        dummy_modules: [psu, backlight]
+    guivm_all_services: [guivm, guivm-gui-agent, guivm-vnc, lightdm, dummy-psu, dummy-backlight]
+    guivm_dummy_packages: {psu: dummy-psu-sender, backlight: dummy-backlight-dom0}
+    guivm_settings: "{{ guivm_types[guivm_kind] }}"
+  handlers:
+    - name: Tell to restart the GUI domain
+      ansible.builtin.debug:
+        msg: "{{ guivm_qube }} changed, restart it if it is running."
+  tasks:
+    - name: Keep the modules of the GUI domain type
+      ansible.builtin.set_fact:
+        guivm_module_list: "{{ guivm_module_input | intersect(guivm_settings.dummy_modules) }}"
+
+    - name: Install the dom0 packages
+      qubesos.core.qubes_dom0_update:
+        name: >-
+          {{ (['qubes-input-proxy-sender'] if guivm_kind == 'gpu' else [])
+             + (guivm_module_list | map('extract', guivm_dummy_packages) | list) }}
+        state: present
+      when: guivm_kind == 'gpu' or guivm_module_list | length > 0
+
+    # Services of the other types and of dropped modules are removed
+    - name: Set up the GUI domain
+      vars:
+        guivm_services_on: >-
+          {{ guivm_settings.services + (guivm_module_list | map('regex_replace', '^', 'dummy-') | list) }}
+        guivm_services_off: >-
+          {{ guivm_all_services | difference(guivm_services_on) | map('regex_replace', '^', 'service.') | list }}
+      qubesos.core.qube:
+        name: "{{ guivm_qube }}"
+        state: present
+        properties: >-
+          {{ guivm_settings.properties
+             | dict2items | rejectattr('key', 'in', ['audiovm'] if guivm_is_audiovm else []) | items2dict
+             | combine({'virt_mode': 'hvm'} if guivm_pci_list | length > 0 else {}) }}
+        services: "{{ guivm_services_on }}"
+        features: "{{ guivm_settings.features | combine(dict(guivm_services_off | zip_longest([]))) }}"
+      notify: Tell to restart the GUI domain
+
+    - name: Add the dom0 session of the GUI domain
+      ansible.builtin.copy:
+        dest: "/usr/share/xsessions/{{ guivm_qube }}.desktop"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Desktop Entry]
+          Name=GUI Domain ({{ guivm_qube }})
+          Exec=qubes-guivm-session {{ guivm_qube }}
+          Type=Application
+      when: guivm_kind == 'gui'
+
+    - name: Send the dom0 input devices to the GUI domain
+      ansible.builtin.copy:
+        dest: /etc/qubes/input-proxy-target
+        owner: root
+        group: root
+        mode: "0644"
+        content: "TARGET_DOMAIN={{ guivm_qube }}\n"
+      when: guivm_kind == 'gpu'
+
+    - name: Read the default GUI domain
+      ansible.builtin.command: qubes-prefs default_guivm
+      register: default_guivm_pref
+      changed_when: false
+      when: guivm_default | default(false) | bool
+
+    - name: Make it the default GUI domain
+      ansible.builtin.command: qubes-prefs default_guivm {{ guivm_qube }}
+      changed_when: true
+      when:
+        - guivm_default | default(false) | bool
+        - default_guivm_pref.stdout != guivm_qube
+
+    - name: Show the clients in the GUI domain
+      qubesos.core.qube:
+        name: "{{ item }}"
+        state: present
+        properties:
+          guivm: "{{ guivm_qube }}"
+      loop: "{{ guivm_client_list }}"
+
+- name: Prepare templates
+  hosts: guivm_templates
+  remote_user: root
+  gather_facts: false
+  collections:
+    - qubesos.setup
+  roles:
+    - role: guivm
+      vars:
+        guivm_phase: template
+
+# The GUI domain starts from the updated template
+- name: Shutdown templates
+  hosts: localhost
+  connection: ansible.builtin.local
+  gather_facts: false
+  tasks:
+    - name: Shut down templates
+      qubesos.core.qube:
+        name: "{{ item }}"
+        state: halted
+        klass: TemplateVM
+      loop: "{{ groups.get('guivm_templates', []) | difference([guivm_qube]) }}"
+
+- name: Configure the GUI domain session
+  hosts: guivm_homes
+  remote_user: root
+  gather_facts: false
+  collections:
+    - qubesos.setup
+  roles:
+    - role: guivm
+      vars:
+        guivm_phase: appvm
+      when: guivm_session_setup
+
+- name: Install the GUI domain policy
+  hosts: localhost
+  connection: ansible.builtin.local
+  gather_facts: false
+  become: true
+  tasks:
+    # Without the filter, admin.vm.Stats to dom0 sends the stats of every qube
+    - name: Check that qubesd filters admin.vm.Stats per qube
+      ansible.builtin.command: >-
+        python3 -c "import qubes.ext.admin as a; print(hasattr(a.AdminExtension, 'admin_vm_stats'))"
+      register: stats_filter_check
+      changed_when: false
+
+    - name: Write the input policy
+      ansible.builtin.template:
+        src: templates/guivm-input.policy.j2
+        dest: "/etc/qubes/policy.d/45-input-{{ guivm_qube }}.policy"
+        mode: "0664"
+        owner: root
+        group: qubes
+        validate: qubes-policy-lint %s
+      vars:
+        guivm: "{{ guivm_qube }}"
+        usbvm: "{{ guivm_usbvm | default('sys-usb') }}"
+      when: guivm_kind == 'gpu'
+
+    - name: Write the GUI policy
+      ansible.builtin.template:
+        src: templates/guivm.policy.j2
+        dest: "/etc/qubes/policy.d/50-gui-{{ guivm_qube }}.policy"
+        mode: "0664"
+        owner: root
+        group: qubes
+        validate: qubes-policy-lint %s
+      vars:
+        guivm: "{{ guivm_qube }}"
+        stats_filter: "{{ stats_filter_check.stdout == 'True' }}"
+
+    - name: Give the GUI domain the admin API of the qubes it shows
+      ansible.builtin.lineinfile:
+        path: /etc/qubes/policy.d/include/admin-local-rwx
+        line: "{{ item }}"
+      loop:
+        - "{{ guivm_qube }} @tag:guivm-{{ guivm_qube }} allow target=dom0"
+        - "{{ guivm_qube }} {{ guivm_qube }} allow target=dom0"
+
+    - name: Set the global admin API of the GUI domain
+      ansible.builtin.lineinfile:
+        path: "/etc/qubes/policy.d/include/admin-global-{{ item.0 }}"
+        line: "{{ item.1 }}"
+        state: "{{ 'present' if item.0 == guivm_admin_global else 'absent' }}"
+      loop: >-
+        {{ ['ro', 'rwx'] | product([guivm_qube + ' @adminvm allow target=dom0',
+                                    guivm_qube + ' @tag:guivm-' + guivm_qube + ' allow target=dom0',
+                                    guivm_qube + ' ' + guivm_qube + ' allow target=dom0']) | list }}
+      loop_control:
+        label: "admin-global-{{ item.0 }}: {{ item.1 }}"
+
+- name: Shutdown qubes
+  hosts: localhost
+  connection: ansible.builtin.local
+  gather_facts: false
+  tasks:
+    # Running clients started before it still show in dom0
+    - name: Shut down the qube the session setup started
+      qubesos.core.qube:
+        name: "{{ guivm_home }}"
+        state: halted
+        force: true
+      when:
+        - not guivm_skip_home
+        - guivm_home_state != 'running'
+
+    # Last, the session setup must not start it with the GPU
+    - name: Assign the PCI devices
+      qubesos.core.qube:
+        name: "{{ guivm_qube }}"
+        state: present
+        devices:
+          strategy: append
+          items: "{{ guivm_pci_list }}"
+      when: guivm_pci_list | length > 0

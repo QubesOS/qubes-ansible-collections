@@ -16,6 +16,7 @@ tags:
   - split_gpg
   - split_ssh
   - audiovm
+  - guivm
 repository: https://github.com/QubesOS/qubes-ansible-collections
 issues: https://github.com/QubesOS/qubes-ansible-collections/issues
 dependencies: {}
