@@ -61,5 +61,27 @@
 - name: Verify audiovm
   import_playbook: verify-audiovm.yml
 
+- name: Clean mgmt dispvms before guivm
+  import_playbook: cleanup-mgmt-dispvms.yml
+
+- name: Deploy a GUI domain
+  import_playbook: ../playbooks/guivm.yml
+  vars:
+    guivm_name: "{{ test_prefix | default('ci') }}-gui"
+    guivm_template: "{{ hostvars['localhost'].effective_template }}"
+    guivm_dummy_modules: [psu, backlight]
+    guivm_clients: "{{ test_prefix | default('ci') }}-personal"
+
+- name: Deploy a VNC GUI domain
+  import_playbook: ../playbooks/guivm.yml
+  vars:
+    guivm_name: "{{ test_prefix | default('ci') }}-gui-vnc"
+    guivm_type: vnc
+    guivm_template: "{{ hostvars['localhost'].effective_template }}"
+    guivm_password_hash: "{{ hostvars['localhost'].ci_guivm_password_hash }}"
+
+- name: Verify GUI domains
+  import_playbook: verify-guivm.yml
+
 - name: Clean up test qubes
   import_playbook: cleanup.yml

@@ -25,6 +25,8 @@
         - "{{ prefix }}-audio"
         - "{{ prefix }}-usb"
         - "{{ prefix }}-usb-dvm"
+        - "{{ prefix }}-gui"
+        - "{{ prefix }}-gui-vnc"
       when: test_cleanup | default(true) | bool
 
     - name: Remove the audiovm policies
@@ -34,6 +36,25 @@
       loop:
         - "{{ prefix }}-audio"
         - "{{ prefix }}-usb"
+      become: true
+      when: test_cleanup | default(true) | bool
+
+    - name: Remove the GUI domain policies and dom0 session
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/etc/qubes/policy.d/50-gui-{{ prefix }}-gui.policy"
+        - "/etc/qubes/policy.d/50-gui-{{ prefix }}-gui-vnc.policy"
+        - "/usr/share/xsessions/{{ prefix }}-gui.desktop"
+      become: true
+      when: test_cleanup | default(true) | bool
+
+    - name: Remove the GUI domains from the local admin API include
+      ansible.builtin.lineinfile:
+        path: /etc/qubes/policy.d/include/admin-local-rwx
+        regexp: "^{{ prefix }}-gui(-vnc)? "
+        state: absent
       become: true
       when: test_cleanup | default(true) | bool
 

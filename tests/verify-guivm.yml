@@ -1,0 +1,180 @@
+---
+- name: Verify the GUI domains in dom0
+  hosts: localhost
+  connection: ansible.builtin.local
+  gather_facts: false
+  vars:
+    prefix: "{{ test_prefix | default('ci') }}"
+  tasks:
+    - name: Read the GUI domain
+      qubesos.core.qube_facts:
+        name: "{{ prefix }}-gui"
+      register: guivm_gui
+
+    - name: Assert the GUI domain is set up
+      vars:
+        qube: "{{ guivm_gui.ansible_facts.qubes_facts }}"
+      ansible.builtin.assert:
+        that:
+          - qube.properties.guivm == 'dom0'
+          - qube.properties.audiovm == 'dom0'
+          - qube.properties.netvm in ['', 'None']
+          - qube.properties.autostart == 'True'
+          - qube.services.guivm
+          - qube.services['guivm-gui-agent']
+          - qube.services['dummy-psu']
+          - qube.services['dummy-backlight']
+          - qube.features['gui-allow-fullscreen'] == '1'
+          - qube.features['gui-secure-copy-sequence'] == 'none'
+
+    - name: Read the VNC GUI domain
+      qubesos.core.qube_facts:
+        name: "{{ prefix }}-gui-vnc"
+      register: guivm_vnc
+
+    - name: Assert the VNC GUI domain is set up
+      vars:
+        qube: "{{ guivm_vnc.ansible_facts.qubes_facts }}"
+      ansible.builtin.assert:
+        that:
+          - qube.properties.guivm == 'dom0'
+          - qube.properties.audiovm in ['', 'None']
+          - qube.services.lightdm
+          - qube.services.guivm
+          - qube.services['guivm-vnc']
+          - "'service.guivm-gui-agent' not in qube.features"
+
+    - name: Read the GUI client
+      qubesos.core.qube_facts:
+        name: "{{ prefix }}-personal"
+      register: guivm_client
+
+    - name: Assert the client shows in the GUI domain
+      ansible.builtin.assert:
+        that:
+          - guivm_client.ansible_facts.qubes_facts.properties.guivm == prefix + '-gui'
+
+    - name: Check the dom0 session of the GUI domain
+      ansible.builtin.stat:
+        path: "/usr/share/xsessions/{{ prefix }}-gui.desktop"
+      register: guivm_xsession
+
+    - name: Assert the dom0 session exists
+      ansible.builtin.assert:
+        that:
+          - guivm_xsession.stat.exists
+
+    - name: Lint the GUI policies
+      ansible.builtin.command:
+        argv:
+          - qubes-policy-lint
+          - "/etc/qubes/policy.d/50-gui-{{ prefix }}-gui.policy"
+          - "/etc/qubes/policy.d/50-gui-{{ prefix }}-gui-vnc.policy"
+      changed_when: false
+
+    - name: Read the GUI policy
+      ansible.builtin.slurp:
+        src: "/etc/qubes/policy.d/50-gui-{{ prefix }}-gui.policy"
+      register: guivm_policy
+
+    - name: Assert the GUI domain lists itself and gets the power supply
+      vars:
+        policy: "{{ guivm_policy.content | b64decode }}"
+        gui: "{{ prefix }}-gui"
+      ansible.builtin.assert:
+        that:
+          - "('admin.vm.List  *  ' + gui + '  ' + gui + '  allow target=dom0') in policy"
+          - "('admin.Events  *  ' + gui + '  ' + gui + '  allow target=dom0') in policy"
+          - "('qubes.PowerSupply  *  ' + gui) in policy"
+
+    - name: Read the local admin API include
+      ansible.builtin.slurp:
+        src: /etc/qubes/policy.d/include/admin-local-rwx
+      register: guivm_include
+
+    - name: Assert the GUI domain manages the qubes it shows
+      ansible.builtin.assert:
+        that:
+          - "(prefix + '-gui @tag:guivm-' + prefix + '-gui allow target=dom0') in (guivm_include.content | b64decode)"
+
+- name: Verify the GUI domain template
+  hosts: guivm_templates
+  gather_facts: false
+  strategy: ansible.builtin.linear
+  remote_user: root
+  tasks:
+    - name: Read the installed packages
+      ansible.builtin.package_facts:
+
+    - name: Assert the GUI domain packages are installed
+      ansible.builtin.assert:
+        that:
+          - "'qubes-vm-guivm' in ansible_facts.packages"
+          - "'qubes-manager' in ansible_facts.packages"
+
+    - name: Check that lightdm starts at boot
+      ansible.builtin.stat:
+        path: /etc/systemd/system/multi-user.target.wants/lightdm.service
+      register: guivm_lightdm_link
+
+    - name: Assert lightdm starts at boot
+      ansible.builtin.assert:
+        that:
+          - guivm_lightdm_link.stat.islnk
+
+- name: Verify the GUI domain session
+  hosts: "{{ test_prefix | default('ci') }}-gui"
+  gather_facts: false
+  strategy: ansible.builtin.linear
+  remote_user: root
+  tasks:
+    - name: Check the hidden network applet
+      ansible.builtin.slurp:
+        src: /home/user/.config/autostart/nm-applet.desktop
+      register: guivm_applet
+
+    - name: Assert the network applet is hidden
+      ansible.builtin.assert:
+        that:
+          - "'Hidden=true' in (guivm_applet.content | b64decode)"
+
+- name: Start the VNC GUI domain
+  hosts: localhost
+  connection: ansible.builtin.local
+  gather_facts: false
+  vars:
+    prefix: "{{ test_prefix | default('ci') }}"
+  tasks:
+    - name: Start the VNC GUI domain
+      qubesos.core.qube:
+        name: "{{ prefix }}-gui-vnc"
+        state: running
+
+- name: Verify the VNC GUI domain session
+  hosts: "{{ test_prefix | default('ci') }}-gui-vnc"
+  gather_facts: false
+  strategy: ansible.builtin.linear
+  remote_user: root
+  tasks:
+    - name: Wait for lightdm
+      ansible.builtin.service_facts:
+      register: guivm_vnc_services
+      until: >-
+        guivm_vnc_services.ansible_facts.services['lightdm.service'].state | default('') == 'running'
+      retries: 30
+      delay: 5
+
+    - name: Wait for the VNC server
+      ansible.builtin.wait_for:
+        port: 5900
+        timeout: 120
+
+    - name: Read the user password
+      ansible.builtin.command: getent shadow user
+      register: guivm_vnc_shadow
+      changed_when: false
+
+    - name: Assert the password hash is set at boot
+      ansible.builtin.assert:
+        that:
+          - guivm_vnc_shadow.stdout.split(':')[1] == hostvars['localhost'].ci_guivm_password_hash

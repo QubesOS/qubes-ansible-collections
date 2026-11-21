@@ -90,6 +90,12 @@
       ansible.builtin.set_fact:
         ci_client_agents: "{{ {prefix + '-work': ['work', 'shared'], prefix + '-personal': ['personal', 'shared']} }}"
 
+    # Test password of the VNC GUI domain user, 'ci-test-pass'
+    - name: Set the GUI domain password hash
+      ansible.builtin.set_fact:
+        ci_guivm_password_hash: >-
+          $6$citestsalt$dM7OuK/bcDbQo3vIX.9IRz2R.YjPOn9En.Dmg5y0U.4QF8jYG.92YEdylsOhTFlSxHXZ.x5vGTR32hyqxMaoa0
+
     - name: Register test qubes for the qubes connection
       ansible.builtin.add_host:
         name: "{{ item }}"
