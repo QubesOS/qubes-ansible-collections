@@ -41,5 +41,25 @@
 - name: Verify bind-dirs
   import_playbook: verify-bind-dirs.yml
 
+- name: Clean mgmt dispvms before audiovm
+  import_playbook: cleanup-mgmt-dispvms.yml
+
+- name: Deploy a new audiovm
+  import_playbook: ../playbooks/audiovm.yml
+  vars:
+    audiovm_name: "{{ test_prefix | default('ci') }}-audio"
+    audiovm_template: "{{ hostvars['localhost'].effective_template }}"
+    audiovm_pci_devices: []
+
+- name: Deploy the disposable USB qube as audiovm
+  import_playbook: ../playbooks/audiovm.yml
+  vars:
+    audiovm_name: "{{ test_prefix | default('ci') }}-usb"
+    audiovm_clients: "{{ test_prefix | default('ci') }}-work"
+    audiovm_pci_devices: []
+
+- name: Verify audiovm
+  import_playbook: verify-audiovm.yml
+
 - name: Clean up test qubes
   import_playbook: cleanup.yml

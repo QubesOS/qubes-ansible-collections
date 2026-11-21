@@ -1,0 +1,102 @@
+---
+- name: Verify the audiovm qubes in dom0
+  hosts: localhost
+  connection: ansible.builtin.local
+  gather_facts: false
+  vars:
+    prefix: "{{ test_prefix | default('ci') }}"
+  tasks:
+    - name: Read the new audiovm
+      qubesos.core.qube_facts:
+        name: "{{ prefix }}-audio"
+      register: audiovm_new
+
+    - name: Assert the new audiovm is created and set up
+      vars:
+        qube: "{{ audiovm_new.ansible_facts.qubes_facts }}"
+      ansible.builtin.assert:
+        that:
+          - qube.properties.klass == 'AppVM'
+          - qube.properties.label == 'black'
+          - qube.properties.netvm in ['', 'None']
+          - qube.properties.audiovm in ['', 'None']
+          - qube.properties.autostart == 'True'
+          - qube.services.audiovm
+          - qube.features.servicevm == '1'
+
+    - name: Read the USB qube
+      qubesos.core.qube_facts:
+        name: "{{ prefix }}-usb"
+      register: audiovm_usb
+
+    - name: Assert the USB qube keeps its settings and is the audiovm
+      vars:
+        qube: "{{ audiovm_usb.ansible_facts.qubes_facts }}"
+      ansible.builtin.assert:
+        that:
+          - qube.properties.klass == 'DispVM'
+          - qube.properties.label == 'red'
+          - qube.properties.memory == '300'
+          - qube.properties.template == prefix + '-usb-dvm'
+          - qube.properties.audiovm in ['', 'None']
+          - qube.services.audiovm
+          - "'service.minimal-usbvm' not in qube.features"
+
+    - name: Read the audio client
+      qubesos.core.qube_facts:
+        name: "{{ prefix }}-work"
+      register: audiovm_client
+
+    - name: Assert the client plays through the USB qube
+      vars:
+        qube: "{{ audiovm_client.ansible_facts.qubes_facts }}"
+      ansible.builtin.assert:
+        that:
+          - qube.properties.audiovm == prefix + '-usb'
+          - "'audiovm-' + prefix + '-usb' in qube.tags"
+
+    - name: Lint the audiovm policies
+      ansible.builtin.command:
+        argv:
+          - qubes-policy-lint
+          - "/etc/qubes/policy.d/50-audio-{{ prefix }}-audio.policy"
+          - "/etc/qubes/policy.d/50-audio-{{ prefix }}-usb.policy"
+      changed_when: false
+
+    - name: Read the policy of the USB qube
+      ansible.builtin.slurp:
+        src: "/etc/qubes/policy.d/50-audio-{{ prefix }}-usb.policy"
+      register: audiovm_policy
+
+    - name: Assert the USB qube reads its clients
+      ansible.builtin.assert:
+        that:
+          - "'@tag:audiovm-' + prefix + '-usb' in (audiovm_policy.content | b64decode)"
+
+- name: Verify the audiovm template
+  hosts: audiovm_templates
+  gather_facts: false
+  strategy: ansible.builtin.linear
+  remote_user: root
+  tasks:
+    - name: Read the installed packages
+      ansible.builtin.package_facts:
+
+    - name: Assert the audio packages are installed
+      ansible.builtin.assert:
+        that:
+          - "'qubes-audio-daemon' in ansible_facts.packages"
+          - "'qubes-core-admin-client' in ansible_facts.packages"
+
+    - name: Check the autostart drop-ins
+      ansible.builtin.stat:
+        path: "/etc/qubes/autostart/{{ item }}.d/50_audiovm.conf"
+      register: audiovm_dropins
+      loop:
+        - qubes-pulseaudio.desktop
+        - pulseaudio.desktop
+
+    - name: Assert the autostart drop-ins exist
+      ansible.builtin.assert:
+        that:
+          - audiovm_dropins.results | selectattr('stat.exists') | list | length == 2
