@@ -1,0 +1,4 @@
+---
+- name: Tell to restart the audiovm
+  ansible.builtin.debug:
+    msg: "{{ audiovm_name }} changed, restart it if it is running."

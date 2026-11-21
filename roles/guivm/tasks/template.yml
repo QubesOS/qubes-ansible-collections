@@ -1,0 +1,45 @@
+---
+- name: Gather the distribution
+  ansible.builtin.setup:
+    gather_subset: [min]
+
+- name: Install the GUI domain packages
+  ansible.builtin.package:
+    name: >-
+      {{ guivm_packages_common
+         + (guivm_packages_debian if ansible_facts['os_family'] == 'Debian'
+            else guivm_packages_redhat) }}
+    state: present
+  notify: Tell to restart the GUI domain
+
+- name: Create the lightdm drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/lightdm.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Start lightdm with its qubes-service only
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/lightdm.service.d/qubes.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      ConditionPathExists=/var/run/qubes-service/lightdm
+  notify: Tell to restart the GUI domain
+
+# Qubes boots to multi-user.target
+- name: Start lightdm at boot
+  ansible.builtin.file:
+    src: /usr/lib/systemd/system/lightdm.service
+    dest: /etc/systemd/system/multi-user.target.wants/lightdm.service
+    state: link
+  notify: Tell to restart the GUI domain
+
+- name: Lock the root password
+  ansible.builtin.user:
+    name: root
+    password: "!!"

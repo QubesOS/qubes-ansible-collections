@@ -1,0 +1,54 @@
+---
+# Phase 'template' or 'appvm', set by the playbook
+guivm_phase: ""
+
+# Set by the playbook
+guivm_name: ""
+guivm_type: gui
+guivm_user: user
+
+# Lightdm password hash of 'gpu' and 'vnc', locked when empty
+guivm_user_password_hash: ""
+
+guivm_packages_common:
+  - qubes-manager
+  - qubes-desktop-linux-manager
+  - qubes-vm-guivm
+  - arc-theme
+  - gvfs
+  - xdg-user-dirs-gtk
+  - xfce4-appfinder
+  - xfce4-datetime-plugin
+  - xfce4-panel
+  - xfce4-places-plugin
+  - xfce4-power-manager
+  - xfce4-pulseaudio-plugin
+  - xfce4-screensaver
+  - xfce4-session
+  - xfce4-settings
+  - xfce4-settings-qubes
+  - xfce4-taskmanager
+  - xfce4-terminal
+  - xfconf
+  - xfwm4
+guivm_packages_redhat:
+  - dummy-psu-receiver
+  - dummy-backlight-vm
+  - adwaita-icon-theme
+  - greybird-dark-theme
+  - greybird-light-theme
+  - greybird-xfce4-notifyd-theme
+  - greybird-xfwm4-theme
+  - gtk-xfce-engine
+  - lightdm-gtk
+  - xfce4-about
+  - xfce4-screenshooter-plugin
+  - xfdesktop
+  - xfwm4-themes
+guivm_packages_debian:
+  - blackbird-gtk-theme
+  - greybird-gtk-theme
+  - libxfce4ui-utils
+  - lightdm
+  - xfce4-screenshooter
+  - xfdesktop4

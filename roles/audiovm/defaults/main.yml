@@ -1,0 +1,17 @@
+---
+# Phase 'template', set by the playbook
+audiovm_phase: ""
+
+# Set by the playbook
+audiovm_name: ""
+audiovm_on_guivm: false
+
+audiovm_packages:
+  - qubes-core-admin-client
+  - qubes-audio-daemon
+
+# A GUI domain has the volume of its panel
+audiovm_applet_packages_redhat:
+  - volumeicon
+audiovm_applet_packages_debian:
+  - volumeicon-alsa

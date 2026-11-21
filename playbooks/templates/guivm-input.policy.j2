@@ -1,0 +1,9 @@
+{% macro action(a) -%}
+{{ {'ask': 'ask user=root default_target=' + guivm,
+    'allow': 'allow user=root target=' + guivm}.get(a, 'deny') }}
+{%- endmacro %}
+qubes.InputMouse  *  {{ usbvm }}  dom0  {{ action(guivm_mouse) }}
+qubes.InputMouse  *  {{ usbvm }}  {{ guivm }}  {{ action(guivm_mouse) }}
+qubes.InputKeyboard  *  {{ usbvm }}  dom0  {{ action(guivm_keyboard) }}
+qubes.InputKeyboard  *  {{ usbvm }}  {{ guivm }}  {{ action(guivm_keyboard) }}
+qubes.InputTablet  *  {{ usbvm }}  dom0  deny

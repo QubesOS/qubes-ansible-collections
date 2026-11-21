@@ -37,6 +37,8 @@ ansible-galaxy collection install qubesos-setup-*.tar.gz
 | `split_gpg` | template + qube (vault or client) | Install `qubes-gpg-split` packages (its `/etc/profile.d/qubes-gpg.sh` defaults `QUBES_GPG_DOMAIN` to `@default` when unconfigured); in the vault, ensure `~/.gnupg` exists. Vault routing is done in qrexec policy via `@default target=<vault>`. |
 | `qsvc_qube` | template + qube | Install packages, add qubes-service systemd condition, enable units; drop per-service `rc.local.d/30-<svc>.rc` snippet (bind-dirs delegated to `bind_dirs`). |
 | `qsvc_dom0` | dom0 | Enable `qvm-service` flag for a list of qubes. |
+| `audiovm` | template | Install `qubes-core-admin-client`, `qubes-audio-daemon` and a volume applet in the template of the audiovm, with autostart drop-ins that only apply in qubes with the `audiovm` service. The `audiovm` playbook does the dom0 part: the qube, its PCI devices, services and policy. |
+| `guivm` | template + qube | Install the XFCE GUI domain packages and the lightdm unit in the template, hide the network applet in the session and set the lightdm password of `gpu` and `vnc`. The `guivm` playbook does the dom0 part: the qube, its services, policy and admin API includes, and the GPU. |
 
 Roles that target both `template` and `qube` auto-detect the host's
 klass via `qubesos.core.qube_facts` and run the appropriate phase.
@@ -266,6 +268,120 @@ ansible-playbook qubesos.setup.bind_dirs \
 (`qubes-bind-dirs.d/50-<tag>.conf`) to avoid collisions between
 callers. The `50-` priority prefix can be overridden via
 `-e bind_dirs_priority=<NN>` if you need a specific load order.
+
+### AudioVM
+
+The playbook makes a qube the audiovm.
+It creates the qube when it does not exist.
+An existing qube keeps its template, label, memory and netvm, so a USB qube can be the audiovm too, disposable or not.
+
+```bash
+ansible-playbook qubesos.setup.audiovm -e audiovm_default=true
+```
+
+This creates `sys-audio` from `audiovm_template`, gives it every audio controller of the host and makes it the default audiovm.
+
+Make `sys-usb` the audiovm of some qubes, for USB headsets, and keep the sound card in dom0:
+
+```bash
+ansible-playbook qubesos.setup.audiovm \
+  -e audiovm_name=sys-usb -e audiovm_clients=work,personal \
+  -e '{"audiovm_pci_devices": []}'
+```
+
+Without the empty `audiovm_pci_devices`, `sys-usb` also gets the audio controllers of the host.
+PCI devices are added to the ones already assigned, the USB controllers stay.
+
+The audiovm plays its own sound on its hardware, its `audiovm` property is set to none.
+In its template, the role installs `qubes-core-admin-client` and `qubes-audio-daemon`, and adds autostart drop-ins that only apply in qubes with the `audiovm` service.
+The audio daemon runs in the desktop session of the audiovm and plays through its sound server.
+A minimal template may have neither, add the packages to `audiovm_packages`.
+
+The role removes the `minimal-usbvm` service from the audiovm, because that service stops pipewire and wireplumber.
+This also brings back bluetooth, polkit and gvfs in a USB qube.
+The stock `sys-usb` has 300 MB of memory, which leaves about 50 MB free with the sound server running: raise it for heavier use.
+
+When the qube is already a GUI domain (it has the `guivm` service), it becomes the audiovm too.
+Its admin API comes from `include/admin-local-ro` instead of a policy file, and it gets no volume applet.
+
+The playbook does not shut the audiovm down, a `sys-usb` holds the USB input.
+New PCI devices and template changes apply at its next start, the playbook says when to restart it.
+qubesd refuses to shut down an audiovm while its clients run: stop them first, or use `qvm-shutdown --force`.
+
+> Note: this playbook replaces the `qvm.sys-audio` and `qvm.default-audiovm` Salt formulas of `qubes-mgmt-salt-dom0-virtual-machines`.
+> The session settings of `qvm.sys-audio-vm` are autostart drop-ins in the template instead of files in the home of the audiovm.
+
+Variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `audiovm_name` | `sys-audio` | Qube to make the audiovm |
+| `audiovm_template` | Fedora XFCE | Template of a new qube, installed when missing |
+| `audiovm_label` | `black` | Label of a new qube |
+| `audiovm_memory` | `400` | Initial memory of a new qube |
+| `audiovm_pci_devices` | `auto` | PCI devices to add, `auto` is every audio controller of the host, entries are device specs or `{device, mode, options}` |
+| `audiovm_default` | `false` | Set `default_audiovm` to the audiovm |
+| `audiovm_clients` | `[]` | Qubes whose `audiovm` is set to the audiovm |
+
+### GUI domain
+
+The playbook makes a qube a GUI domain.
+`guivm_type` selects its kind:
+
+- `gui`: `sys-gui`, its desktop shows in a dom0 session named after it
+- `gpu`: `sys-gui-gpu`, owns a GPU and gets the dom0 and USB input devices
+- `vnc`: `sys-gui-vnc`, reached through VNC
+
+```bash
+ansible-playbook qubesos.setup.guivm -e guivm_default=true -e guivm_dummy_modules=psu,backlight
+```
+
+This creates `sys-gui`, installs the GUI domain packages in its template, writes `50-gui-sys-gui.policy` and makes `sys-gui` the default GUI domain.
+Log out and pick the "GUI Domain (sys-gui)" session in lightdm to use it.
+
+A GPU GUI domain with the Intel integrated GPU:
+
+```bash
+ansible-playbook qubesos.setup.guivm \
+  -e guivm_name=sys-gui-gpu -e guivm_type=gpu \
+  -e '{"guivm_pci_devices": [{"device": "pci:dom0:00_02.0", "options": {"permissive": true}}]}' \
+  -e guivm_password_hash="$(openssl passwd -6)"
+```
+
+The GPU is assigned last.
+The session setup must not start the qube with the GPU, so a later run skips it while the qube is halted with PCI devices.
+The password hash is set at each boot for the lightdm login of `gpu` and `vnc`, without it the account stays locked.
+
+The session setup runs in the qube, or in its disposable template for a disposable GUI domain.
+The playbook starts the qube for it and shuts it down again if it was halted.
+
+The GUI policy also allows `admin.vm.List` and `admin.Events` on the GUI domain itself.
+Without them `qui-domains`, the app menu and `qvm-start-daemon` stop on `KeyError` because the GUI domain cannot see itself.
+`admin.vm.Stats` is allowed only when qubesd filters it per qube.
+Otherwise it is denied without notification, since dom0 would send the stats of every qube, and `qui-domains` shows no CPU and memory use.
+
+> Note: this playbook replaces the `qvm.sys-gui`, `qvm.sys-gui-gpu`, `qvm.sys-gui-vnc` and `qvm.default-guivm` Salt formulas of `qubes-mgmt-salt-dom0-virtual-machines`, one `guivm_type` per formula.
+> The GPU assignment replaces the `qvm.sys-gui-gpu-attach-gpu` state.
+> The GUI policy is the one of the formulas, plus the `admin.vm.List`, `admin.Events` and `admin.vm.Stats` rules above.
+
+Variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `guivm_name` | `sys-gui` | Qube to make a GUI domain |
+| `guivm_type` | `gui` | `gui`, `gpu` or `vnc` |
+| `guivm_template` | Fedora XFCE | Template of a new qube, installed when missing |
+| `guivm_label` | `black` | Label of a new qube |
+| `guivm_maxmem` | `4000` | Maximum memory of a new qube |
+| `guivm_pci_devices` | `[]` | PCI devices to add, device specs or `{device, mode, options}` |
+| `guivm_dummy_modules` | `[]` | `psu` and `backlight` forward the battery and the backlight (`gpu` only has `psu`) |
+| `guivm_admin_global_permissions` | `''` | Admin API over every qube, `ro` or `rwx` |
+| `guivm_default` | `false` | Set `default_guivm` to the GUI domain |
+| `guivm_clients` | `[]` | Qubes whose `guivm` is set to the GUI domain |
+| `guivm_password_hash` | `''` | Password hash of the GUI domain user (`gpu` and `vnc`) |
+| `guivm_usbvm` | `sys-usb` | USB qube sending input devices to a `gpu` GUI domain |
+| `guivm_mouse_action` | `ask` | `ask`, `allow` or `deny` for USB mice (`gpu`) |
+| `guivm_keyboard_action` | `deny` | `ask`, `allow` or `deny` for USB keyboards (`gpu`) |
 
 ### Importing into your own playbook
 

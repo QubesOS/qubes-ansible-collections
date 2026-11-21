@@ -1,0 +1,68 @@
+---
+- name: Create the autostart directory
+  ansible.builtin.file:
+    path: "/home/{{ guivm_user }}/{{ item }}"
+    state: directory
+    owner: "{{ guivm_user }}"
+    group: "{{ guivm_user }}"
+    mode: "0755"
+  loop:
+    - .config
+    - .config/autostart
+
+# The GUI domain has no network
+- name: Hide the network applet
+  ansible.builtin.copy:
+    dest: "/home/{{ guivm_user }}/.config/autostart/nm-applet.desktop"
+    owner: "{{ guivm_user }}"
+    group: "{{ guivm_user }}"
+    mode: "0640"
+    content: |
+      [Desktop Entry]
+      Hidden=true
+
+- name: Start the GUI and audio daemons in the session
+  ansible.builtin.copy:
+    dest: "/home/{{ guivm_user }}/.config/autostart/qvm-start-daemon.desktop"
+    owner: "{{ guivm_user }}"
+    group: "{{ guivm_user }}"
+    mode: "0640"
+    content: |
+      [Desktop Entry]
+      Name=Qubes Guid/Pacat
+      Comment=Starts GUI/AUDIO daemon for Qubes VMs
+      Icon=qubes
+      Exec=qvm-start-daemon --all --watch
+      Terminal=false
+      Type=Application
+  when: guivm_type == 'gpu'
+
+- name: Create rc.local.d
+  ansible.builtin.file:
+    path: /rw/config/rc.local.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: guivm_type in ['gpu', 'vnc']
+
+# The lightdm login of 'gpu' and 'vnc' asks for it
+- name: Set the password of {{ guivm_user }} at boot
+  ansible.builtin.copy:
+    dest: /rw/config/rc.local.d/50-guivm-password.rc
+    owner: root
+    group: root
+    mode: "0700"
+    content: |
+      #!/bin/sh
+      usermod -p {{ guivm_user_password_hash | quote }} {{ guivm_user }}
+  no_log: true
+  when:
+    - guivm_type in ['gpu', 'vnc']
+    - guivm_user_password_hash | length > 0
+
+- name: Stop setting the password of {{ guivm_user }} at boot
+  ansible.builtin.file:
+    path: /rw/config/rc.local.d/50-guivm-password.rc
+    state: absent
+  when: guivm_type not in ['gpu', 'vnc'] or guivm_user_password_hash | length == 0

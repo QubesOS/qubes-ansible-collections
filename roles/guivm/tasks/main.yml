@@ -1,0 +1,20 @@
+---
+- name: Validate guivm_phase
+  ansible.builtin.assert:
+    that:
+      - guivm_phase in ['template', 'appvm']
+    fail_msg: "'guivm_phase' must be 'template' or 'appvm'."
+
+- name: Validate guivm_type
+  ansible.builtin.assert:
+    that:
+      - guivm_type in ['gui', 'gpu', 'vnc']
+    fail_msg: "'guivm_type' must be 'gui', 'gpu' or 'vnc'."
+
+- name: Run template phase
+  ansible.builtin.import_tasks: template.yml
+  when: guivm_phase == 'template'
+
+- name: Run AppVM phase
+  ansible.builtin.import_tasks: appvm.yml
+  when: guivm_phase == 'appvm'

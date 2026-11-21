@@ -17,6 +17,8 @@
       - "disp-mgmt-{{ prefix }}-vault-gpg"
       - "disp-mgmt-{{ prefix }}-work"
       - "disp-mgmt-{{ prefix }}-personal"
+      - "disp-mgmt-{{ prefix }}-gui"
+      - "disp-mgmt-{{ prefix }}-gui-vnc"
   tasks:
     - name: Remove stale management dispVMs
       qubesos.core.qube:

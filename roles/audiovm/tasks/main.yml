@@ -1,0 +1,10 @@
+---
+- name: Validate audiovm_phase
+  ansible.builtin.assert:
+    that:
+      - audiovm_phase in ['template']
+    fail_msg: "'audiovm_phase' must be 'template'."
+
+- name: Run template phase
+  ansible.builtin.import_tasks: template.yml
+  when: audiovm_phase == 'template'

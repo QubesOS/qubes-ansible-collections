@@ -62,9 +62,39 @@
         - "{{ prefix }}-work"
         - "{{ prefix }}-personal"
 
+    - name: Create a disposable template for the USB qube
+      qubesos.core.qube:
+        name: "{{ prefix }}-usb-dvm"
+        state: present
+        klass: AppVM
+        template: "{{ effective_template }}"
+        properties:
+          label: red
+          template_for_dispvms: true
+
+    # Like the stock sys-usb
+    - name: Create a disposable USB qube
+      qubesos.core.qube:
+        name: "{{ prefix }}-usb"
+        state: present
+        klass: DispVM
+        template: "{{ prefix }}-usb-dvm"
+        properties:
+          label: red
+          memory: 300
+          netvm: null
+        services:
+          - minimal-usbvm
+
     - name: Build per-client agent mapping
       ansible.builtin.set_fact:
         ci_client_agents: "{{ {prefix + '-work': ['work', 'shared'], prefix + '-personal': ['personal', 'shared']} }}"
+
+    # Test password of the VNC GUI domain user, 'ci-test-pass'
+    - name: Set the GUI domain password hash
+      ansible.builtin.set_fact:
+        ci_guivm_password_hash: >-
+          $6$citestsalt$dM7OuK/bcDbQo3vIX.9IRz2R.YjPOn9En.Dmg5y0U.4QF8jYG.92YEdylsOhTFlSxHXZ.x5vGTR32hyqxMaoa0
 
     - name: Register test qubes for the qubes connection
       ansible.builtin.add_host:

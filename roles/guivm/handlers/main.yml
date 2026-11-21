@@ -1,0 +1,4 @@
+---
+- name: Tell to restart the GUI domain
+  ansible.builtin.debug:
+    msg: "{{ guivm_name }} changed, restart it if it is running."
